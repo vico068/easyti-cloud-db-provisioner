@@ -109,13 +109,22 @@ class DatabaseController extends Controller
             'status' => $database->status,
             'host' => $database->host,
             'port' => $database->port,
-            'credentials' => $database->isRunning() ? $database->getCredentials() : null,
-            'resources' => [
-                'vcpu' => $database->vcpu,
-                'ram_mb' => $database->ram_mb,
-                'disk_gb' => $database->disk_gb,
-            ],
+            'username' => $database->username,
+            'password' => $database->password, // Descriptografado pelo accessor
+            'database_name' => $database->database_name,
+            'container_name' => $database->container_name,
+            'container_id' => $database->container_id,
+            'volume_name' => $database->volume_name,
+            'vcpu' => $database->vcpu,
+            'ram_mb' => $database->ram_mb,
+            'disk_gb' => $database->disk_gb,
+            'external_user_id' => $database->external_user_id,
+            'external_slot_id' => $database->external_slot_id,
+            'external_request_id' => $database->external_request_id,
+            'error_message' => $database->error_message,
+            'metadata' => $database->metadata,
             'created_at' => $database->created_at,
+            'updated_at' => $database->updated_at,
             'provisioned_at' => $database->provisioned_at,
         ]);
     }

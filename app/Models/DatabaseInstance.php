@@ -74,6 +74,14 @@ class DatabaseInstance extends Model
     }
 
     /**
+     * Get the route key for the model.
+     */
+    public function getRouteKeyName(): string
+    {
+        return 'uuid';
+    }
+
+    /**
      * Define a senha (criptografada)
      */
     public function setPasswordAttribute(string $password): void
