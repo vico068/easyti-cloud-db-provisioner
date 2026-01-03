@@ -85,8 +85,11 @@ class ProvisionDatabaseJob implements ShouldQueue
         $username = $this->generateUsername();
         $password = $this->generatePassword();
         $databaseName = $this->isRelational() ? $this->generateDatabaseName() : null;
+        
+        // Gera nome do container antecipadamente
+        $containerName = 'db_' . Str::lower(Str::random(12));
 
-        return DB::transaction(function () use ($config, $host, $port, $username, $password, $databaseName) {
+        return DB::transaction(function () use ($config, $host, $port, $username, $password, $databaseName, $containerName) {
             return DatabaseInstance::create([
                 'engine' => $this->request->engine,
                 'vcpu' => $config['vcpu'] ?? 1,
@@ -101,16 +104,22 @@ class ProvisionDatabaseJob implements ShouldQueue
                 'external_user_id' => $this->request->external_user_id,
                 'external_slot_id' => $this->request->external_slot_id,
                 'external_request_id' => $this->request->uuid,
+                'container_name' => $containerName, // Preencher antes de criar
             ]);
         });
     }
 
     /**
-     * Gera username para o banco
+     * Gera username para o banco (sempre root para facilitar)
      */
     private function generateUsername(): string
     {
-        return 'user_' . Str::random(8);
+        // Para PostgreSQL usa 'postgres', para MySQL usa 'root', para Redis não precisa
+        return match($this->request->engine) {
+            DatabaseInstance::ENGINE_POSTGRES => 'postgres',
+            DatabaseInstance::ENGINE_MYSQL => 'root',
+            default => 'root',
+        };
     }
 
     /**

@@ -34,8 +34,8 @@ class DockerService
      */
     private function createPostgresContainer(DatabaseInstance $instance): array
     {
-        $volumeName = "db_{$instance->id}_data";
-        $containerName = "db_{$instance->id}";
+        $volumeName = "{$instance->container_name}_data";
+        $containerName = $instance->container_name;
 
         // Cria volume
         $this->runCommand("docker volume create {$volumeName}");
@@ -79,8 +79,8 @@ class DockerService
      */
     private function createMysqlContainer(DatabaseInstance $instance): array
     {
-        $volumeName = "db_{$instance->id}_data";
-        $containerName = "db_{$instance->id}";
+        $volumeName = "{$instance->container_name}_data";
+        $containerName = $instance->container_name;
 
         // Cria volume
         $this->runCommand("docker volume create {$volumeName}");
@@ -126,8 +126,8 @@ class DockerService
      */
     private function createRedisContainer(DatabaseInstance $instance): array
     {
-        $volumeName = "db_{$instance->id}_data";
-        $containerName = "db_{$instance->id}";
+        $volumeName = "{$instance->container_name}_data";
+        $containerName = $instance->container_name;
 
         // Cria volume
         $this->runCommand("docker volume create {$volumeName}");
