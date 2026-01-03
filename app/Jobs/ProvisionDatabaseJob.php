@@ -129,7 +129,7 @@ class ProvisionDatabaseJob implements ShouldQueue
                 'port' => $port,
                 'database_name' => $databaseName,
                 'username' => $username,
-                'password_encrypted' => encrypt($password),
+                'password' => $password,
                 'status' => DatabaseInstance::STATUS_PROVISIONING,
                 'external_user_id' => $this->request->external_user_id,
                 'external_slot_id' => $this->request->external_slot_id,

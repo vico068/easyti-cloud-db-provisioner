@@ -35,6 +35,7 @@ class DatabaseInstance extends Model
         'port',
         'database_name',
         'username',
+        'password', // Virtual - mutator cuida da criptografia
         'password_encrypted',
         'container_id',
         'container_name',
