@@ -35,10 +35,37 @@ class ProvisionDatabaseJob implements ShouldQueue
             'engine' => $this->request->engine,
         ]);
 
+        // Verifica se já existe uma instância para este request (evita duplicatas)
+        $existingInstance = DatabaseInstance::where('external_request_id', $this->request->uuid)->first();
+        
+        if ($existingInstance) {
+            // Se já existe e está em estado final, não faz nada
+            if (in_array($existingInstance->status, [
+                DatabaseInstance::STATUS_RUNNING,
+                DatabaseInstance::STATUS_STOPPED,
+            ])) {
+                Log::info("Instância já existe e está provisionada", [
+                    'request_id' => $this->request->uuid,
+                    'instance_id' => $existingInstance->id,
+                ]);
+                return;
+            }
+            
+            // Se está provisionando, usa a instância existente
+            if ($existingInstance->status === DatabaseInstance::STATUS_PROVISIONING) {
+                Log::info("Usando instância existente em provisionamento", [
+                    'request_id' => $this->request->uuid,
+                    'instance_id' => $existingInstance->id,
+                ]);
+                $instance = $existingInstance;
+            }
+        }
+
         $this->request->markAsProcessing();
 
         try {
-            $instance = $this->createDatabaseInstance($dockerService, $hostGenerator);
+            // Só cria nova instância se não existir
+            $instance = $instance ?? $this->createDatabaseInstance($dockerService, $hostGenerator);
             
             // Cria o container Docker
             $containerInfo = $dockerService->createContainer($instance);
