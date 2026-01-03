@@ -58,6 +58,7 @@ class DatabaseController extends Controller
             ],
             'user_id' => 'required|integer',
             'slot_id' => 'nullable|integer',
+            'password' => 'required|string|min:8|max:128', // Senha definida pelo usuário
             'config' => 'sometimes|array',
             'config.vcpu' => 'nullable|integer|min:1|max:16',
             'config.ram_mb' => 'nullable|integer|min:128|max:32768',
@@ -79,6 +80,7 @@ class DatabaseController extends Controller
                 'vcpu' => 1,
                 'ram_mb' => 512,
             ],
+            'password_encrypted' => encrypt($validated['password']), // Salva senha criptografada
             'external_user_id' => $validated['user_id'],
             'external_slot_id' => $validated['slot_id'] ?? null,
             'callback_url' => $validated['callback_url'] ?? null,

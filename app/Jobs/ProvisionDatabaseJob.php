@@ -83,7 +83,10 @@ class ProvisionDatabaseJob implements ShouldQueue
         $host = $hostGenerator->generateHost();
         $port = $dockerService->generateUniquePort($this->request->engine);
         $username = $this->generateUsername();
-        $password = $this->generatePassword();
+        
+        // Usa a senha definida pelo usuário ou gera uma nova como fallback
+        $password = $this->request->getPassword() ?? $this->generatePassword();
+        
         $databaseName = $this->isRelational() ? $this->generateDatabaseName() : null;
         
         // Gera nome do container antecipadamente

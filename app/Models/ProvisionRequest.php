@@ -26,6 +26,7 @@ class ProvisionRequest extends Model
         'service_type',
         'engine',
         'config',
+        'password_encrypted', // Senha definida pelo usuário (criptografada)
         'status',
         'database_instance_id',
         'error_message',
@@ -36,6 +37,22 @@ class ProvisionRequest extends Model
         'started_at',
         'completed_at',
     ];
+
+    /**
+     * Retorna a senha descriptografada
+     */
+    public function getPassword(): ?string
+    {
+        if (empty($this->password_encrypted)) {
+            return null;
+        }
+        
+        try {
+            return decrypt($this->password_encrypted);
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
 
     protected $casts = [
         'config' => 'array',
