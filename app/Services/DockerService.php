@@ -29,6 +29,9 @@ class DockerService
         // Garante que a network existe
         $this->ensureNetworkExists();
 
+        // Remove container existente com mesmo nome (se houver)
+        $this->removeExistingContainer($instance->container_name);
+
         $method = match ($instance->engine) {
             DatabaseInstance::ENGINE_POSTGRES => 'createPostgresContainer',
             DatabaseInstance::ENGINE_MYSQL => 'createMysqlContainer',
@@ -37,6 +40,34 @@ class DockerService
         };
 
         return $this->$method($instance);
+    }
+
+    /**
+     * Remove container existente com o mesmo nome (se houver)
+     */
+    private function removeExistingContainer(string $containerName): void
+    {
+        try {
+            // Verifica se container existe
+            $exists = $this->runCommand(
+                "docker ps -aq --filter name=^{$containerName}$",
+                false
+            );
+
+            if (!empty(trim($exists))) {
+                Log::info("Removendo container existente: {$containerName}");
+                
+                // Para e remove o container
+                $this->runCommand("docker stop {$containerName}", false);
+                $this->runCommand("docker rm -f {$containerName}", false);
+                
+                // Remove volumes associados
+                $this->runCommand("docker volume rm {$containerName}_data", false);
+                $this->runCommand("docker volume rm {$containerName}_ssl", false);
+            }
+        } catch (\Exception $e) {
+            Log::debug("Nenhum container existente para remover: {$containerName}");
+        }
     }
 
     /**
