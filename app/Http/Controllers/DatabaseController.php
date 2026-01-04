@@ -6,7 +6,6 @@ use App\Jobs\ProvisionDatabaseJob;
 use App\Models\DatabaseInstance;
 use App\Models\ProvisionRequest;
 use App\Services\DockerService;
-use App\Services\SniProxyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -14,8 +13,7 @@ use Illuminate\Validation\Rule;
 class DatabaseController extends Controller
 {
     public function __construct(
-        private DockerService $dockerService,
-        private SniProxyService $sniProxyService
+        private DockerService $dockerService
     ) {
     }
 
@@ -214,11 +212,6 @@ class DatabaseController extends Controller
      */
     public function destroy(DatabaseInstance $database): JsonResponse
     {
-        // Remove rota SNI (se disponível)
-        if ($this->sniProxyService->isAvailable()) {
-            $this->sniProxyService->removeRoute($database);
-        }
-
         // Remove container Docker
         $this->dockerService->removeContainer($database);
 

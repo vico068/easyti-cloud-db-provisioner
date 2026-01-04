@@ -7,69 +7,44 @@ use Illuminate\Support\Facades\Log;
 
 class HostGeneratorService
 {
-    private const DOMAIN = 'easytidatabase.cloud';
-    private const PREFIX = 'db';
-
     /**
-     * Gera hostname único para nova instância
-     * Formato: db<randomNumber>.easytidatabase.cloud
+     * Retorna o host do servidor de banco de dados
+     * Usa o IP ou hostname configurado no .env
      */
     public function generateHost(): string
     {
-        $attempts = 0;
-        $maxAttempts = 10;
-
-        do {
-            $randomNumber = $this->generateRandomNumber();
-            $host = self::PREFIX . $randomNumber . '.' . self::DOMAIN;
-            
-            // Verifica se já existe
-            $exists = DatabaseInstance::where('host', $host)->exists();
-            
-            $attempts++;
-        } while ($exists && $attempts < $maxAttempts);
-
-        if ($exists) {
-            throw new \RuntimeException('Não foi possível gerar hostname único após várias tentativas');
-        }
-
-        Log::info("Hostname gerado", ['host' => $host]);
+        // Usa o IP/hostname configurado ou detecta automaticamente
+        $host = config('database-provisioner.host', env('DB_PROVISIONER_HOST', $this->detectServerIp()));
+        
+        Log::info("Host do banco de dados", ['host' => $host]);
 
         return $host;
     }
 
     /**
-     * Gera número aleatório de 6-10 dígitos
+     * Detecta o IP público do servidor
      */
-    private function generateRandomNumber(): string
+    private function detectServerIp(): string
     {
-        // Gera número de 6 a 10 dígitos
-        $length = random_int(6, 10);
-        $min = pow(10, $length - 1);
-        $max = pow(10, $length) - 1;
+        // Tenta obter IP da interface de rede
+        $ip = shell_exec("hostname -I | awk '{print $1}'");
+        $ip = trim($ip ?? '');
         
-        return (string) random_int($min, $max);
+        if (!empty($ip) && filter_var($ip, FILTER_VALIDATE_IP)) {
+            return $ip;
+        }
+
+        // Fallback para localhost
+        return '127.0.0.1';
     }
 
     /**
-     * Valida se hostname está no formato correto
+     * Valida se é um IP ou hostname válido
      */
     public function isValidHost(string $host): bool
     {
-        $pattern = '/^' . self::PREFIX . '\d{6,10}\.' . preg_quote(self::DOMAIN, '/') . '$/';
-        return preg_match($pattern, $host) === 1;
-    }
-
-    /**
-     * Extrai o número do hostname
-     */
-    public function extractNumber(string $host): ?string
-    {
-        $pattern = '/^' . self::PREFIX . '(\d{6,10})\.' . preg_quote(self::DOMAIN, '/') . '$/';
-        if (preg_match($pattern, $host, $matches)) {
-            return $matches[1];
-        }
-        return null;
+        return filter_var($host, FILTER_VALIDATE_IP) !== false 
+            || filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false;
     }
 }
 

@@ -408,27 +408,49 @@ class DockerService
 
     /**
      * Gera porta única para novo container
+     * Usa portas padrão: PostgreSQL 5432, MySQL 3306, Redis 6379
+     * Se já houver um banco na porta padrão, incrementa a partir de portas altas
      */
     public function generateUniquePort(string $engine): int
     {
-        $basePort = match ($engine) {
+        // Portas padrão
+        $defaultPort = match ($engine) {
+            DatabaseInstance::ENGINE_POSTGRES => 5432,
+            DatabaseInstance::ENGINE_MYSQL => 3306,
+            DatabaseInstance::ENGINE_REDIS => 6379,
+            default => 10000,
+        };
+
+        // Portas altas para quando já existir banco na porta padrão
+        $highPort = match ($engine) {
             DatabaseInstance::ENGINE_POSTGRES => 15432,
             DatabaseInstance::ENGINE_MYSQL => 13306,
             DatabaseInstance::ENGINE_REDIS => 16379,
             default => 10000,
         };
 
-        // Busca última porta usada para esta engine
+        // Verifica se já existe banco usando a porta padrão
+        $existsOnDefaultPort = DatabaseInstance::where('engine', $engine)
+            ->where('port', $defaultPort)
+            ->whereNotIn('status', [DatabaseInstance::STATUS_DELETED])
+            ->exists();
+
+        if (!$existsOnDefaultPort) {
+            return $defaultPort;
+        }
+
+        // Busca última porta usada para esta engine (portas altas)
         $lastPort = DatabaseInstance::where('engine', $engine)
+            ->where('port', '>=', $highPort)
             ->whereNotNull('port')
             ->orderBy('port', 'desc')
             ->value('port');
 
-        if ($lastPort && $lastPort >= $basePort) {
+        if ($lastPort && $lastPort >= $highPort) {
             return $lastPort + 1;
         }
 
-        return $basePort;
+        return $highPort;
     }
 
     /**

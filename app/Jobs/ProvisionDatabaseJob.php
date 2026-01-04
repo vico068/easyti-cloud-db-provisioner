@@ -6,7 +6,6 @@ use App\Models\DatabaseInstance;
 use App\Models\ProvisionRequest;
 use App\Services\DockerService;
 use App\Services\HostGeneratorService;
-use App\Services\SniProxyService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -79,17 +78,6 @@ class ProvisionDatabaseJob implements ShouldQueue
                 'status' => DatabaseInstance::STATUS_RUNNING,
                 'provisioned_at' => now(),
             ]);
-
-            // Configura rota SNI Proxy (se disponível)
-            $sniProxy = app(SniProxyService::class);
-            if ($sniProxy->isAvailable()) {
-                $sniProxy->addRoute($instance);
-                Log::info("Rota SNI configurada para banco de dados", [
-                    'host' => $instance->host,
-                    'port' => $instance->port,
-                    'engine' => $instance->engine,
-                ]);
-            }
 
             // Marca request como completo
             $this->request->markAsCompleted($instance);
