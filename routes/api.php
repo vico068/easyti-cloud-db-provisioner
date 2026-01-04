@@ -18,7 +18,7 @@ Route::prefix('/databases')->group(function () {
     Route::get('/', [DatabaseController::class, 'index']);
     Route::post('/', [DatabaseController::class, 'store']);
     
-    Route::prefix('/{database}')->group(function () {
+    Route::prefix('/{database}')->where(['database' => '[0-9a-f-]+'])->group(function () {
         Route::get('/', [DatabaseController::class, 'show']);
         Route::post('/start', [DatabaseController::class, 'start']);
         Route::post('/stop', [DatabaseController::class, 'stop']);
