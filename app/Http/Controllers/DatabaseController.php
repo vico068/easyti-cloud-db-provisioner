@@ -174,9 +174,18 @@ class DatabaseController extends Controller
      */
     private function findDatabase(string $identifier): ?DatabaseInstance
     {
-        return DatabaseInstance::where('uuid', $identifier)
-            ->orWhere('id', $identifier)
-            ->first();
+        // Se parece ser um UUID (contém hífens), busca apenas por UUID
+        if (str_contains($identifier, '-')) {
+            return DatabaseInstance::where('uuid', $identifier)->first();
+        }
+        
+        // Se é numérico, busca por ID
+        if (is_numeric($identifier)) {
+            return DatabaseInstance::where('id', $identifier)->first();
+        }
+
+        // Fallback: tenta buscar por UUID
+        return DatabaseInstance::where('uuid', $identifier)->first();
     }
 
     /**
