@@ -6,6 +6,7 @@ use App\Jobs\ProvisionDatabaseJob;
 use App\Models\DatabaseInstance;
 use App\Models\ProvisionRequest;
 use App\Services\DockerService;
+use App\Services\FirewallService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -13,7 +14,8 @@ use Illuminate\Validation\Rule;
 class DatabaseController extends Controller
 {
     public function __construct(
-        private DockerService $dockerService
+        private DockerService $dockerService,
+        private FirewallService $firewallService
     ) {
     }
 
@@ -352,6 +354,114 @@ class DatabaseController extends Controller
         }
 
         return response()->json(['message' => 'Falha ao reiniciar banco de dados'], 500);
+    }
+
+    // ==================== FIREWALL ====================
+
+    /**
+     * Obtém status do firewall
+     */
+    public function getFirewall(string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        return response()->json([
+            'enabled' => $db->firewall_enabled,
+            'rules' => $db->firewall_rules ?? [],
+            'client_ip' => $this->firewallService->detectClientIp(),
+        ]);
+    }
+
+    /**
+     * Ativa ou desativa o firewall
+     */
+    public function toggleFirewall(Request $request, string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+        ]);
+
+        if ($validated['enabled']) {
+            $success = $this->firewallService->enableFirewall($db);
+            $message = 'Firewall ativado com sucesso';
+        } else {
+            $success = $this->firewallService->disableFirewall($db);
+            $message = 'Firewall desativado com sucesso';
+        }
+
+        if (!$success) {
+            return response()->json(['message' => 'Falha ao alterar firewall'], 500);
+        }
+
+        return response()->json([
+            'message' => $message,
+            'enabled' => $db->fresh()->firewall_enabled,
+        ]);
+    }
+
+    /**
+     * Adiciona regra de firewall
+     */
+    public function addFirewallRule(Request $request, string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $validated = $request->validate([
+            'ip' => 'required|string|max:50',
+            'description' => 'nullable|string|max:255',
+        ]);
+
+        try {
+            $this->firewallService->addRule($db, $validated['ip'], $validated['description'] ?? '');
+
+            return response()->json([
+                'message' => 'Regra adicionada com sucesso',
+                'rules' => $db->fresh()->firewall_rules,
+            ]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Erro ao adicionar regra'], 500);
+        }
+    }
+
+    /**
+     * Remove regra de firewall
+     */
+    public function removeFirewallRule(Request $request, string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $validated = $request->validate([
+            'ip' => 'required|string',
+        ]);
+
+        try {
+            $this->firewallService->removeRule($db, $validated['ip']);
+
+            return response()->json([
+                'message' => 'Regra removida com sucesso',
+                'rules' => $db->fresh()->firewall_rules,
+            ]);
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (\Exception $e) {
+            return response()->json(['message' => 'Erro ao remover regra'], 500);
+        }
     }
 }
 

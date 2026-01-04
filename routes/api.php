@@ -26,6 +26,12 @@ Route::prefix('/databases')->group(function () {
         Route::post('/change-password', [DatabaseController::class, 'changePassword']);
         Route::delete('/', [DatabaseController::class, 'destroy']);
         Route::get('/metrics', [DatabaseController::class, 'metrics']);
+        
+        // Firewall
+        Route::get('/firewall', [DatabaseController::class, 'getFirewall']);
+        Route::post('/firewall', [DatabaseController::class, 'toggleFirewall']);
+        Route::post('/firewall/rules', [DatabaseController::class, 'addFirewallRule']);
+        Route::delete('/firewall/rules', [DatabaseController::class, 'removeFirewallRule']);
     });
 });
 

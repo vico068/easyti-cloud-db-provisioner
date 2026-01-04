@@ -41,6 +41,8 @@ class DatabaseInstance extends Model
         'container_name',
         'volume_name',
         'status',
+        'firewall_enabled',
+        'firewall_rules',
         'error_message',
         'external_user_id',
         'external_slot_id',
@@ -51,6 +53,8 @@ class DatabaseInstance extends Model
 
     protected $casts = [
         'metadata' => 'array',
+        'firewall_rules' => 'array',
+        'firewall_enabled' => 'boolean',
         'provisioned_at' => 'datetime',
         'vcpu' => 'integer',
         'ram_mb' => 'integer',
