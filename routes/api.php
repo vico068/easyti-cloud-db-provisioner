@@ -22,6 +22,8 @@ Route::prefix('/databases')->group(function () {
         Route::get('/', [DatabaseController::class, 'show']);
         Route::post('/start', [DatabaseController::class, 'start']);
         Route::post('/stop', [DatabaseController::class, 'stop']);
+        Route::post('/restart', [DatabaseController::class, 'restart']);
+        Route::post('/change-password', [DatabaseController::class, 'changePassword']);
         Route::delete('/', [DatabaseController::class, 'destroy']);
         Route::get('/metrics', [DatabaseController::class, 'metrics']);
     });

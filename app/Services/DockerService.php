@@ -420,6 +420,176 @@ class DockerService
     }
 
     /**
+     * Reinicia container
+     */
+    public function restartContainer(DatabaseInstance $instance): bool
+    {
+        try {
+            $this->runCommand("docker restart {$instance->container_name}");
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Erro ao reiniciar container", [
+                'instance_id' => $instance->id,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Obtém métricas do container
+     */
+    public function getContainerMetrics(DatabaseInstance $instance): array
+    {
+        $metrics = [
+            'running' => false,
+            'cpu_percent' => 0,
+            'memory_usage' => 0,
+            'memory_limit' => $instance->ram_mb * 1024 * 1024,
+            'memory_percent' => 0,
+            'network_rx' => 0,
+            'network_tx' => 0,
+            'disk_read' => 0,
+            'disk_write' => 0,
+            'uptime' => null,
+        ];
+
+        try {
+            // Verifica se está rodando
+            $running = $this->isContainerRunning($instance);
+            $metrics['running'] = $running;
+
+            if (!$running) {
+                return $metrics;
+            }
+
+            // Obtém stats do container (formato JSON)
+            $statsJson = $this->runCommand(
+                "docker stats {$instance->container_name} --no-stream --format '{{json .}}'",
+                false
+            );
+
+            if (!empty($statsJson)) {
+                $stats = json_decode(trim($statsJson), true);
+                
+                if ($stats) {
+                    // CPU
+                    $cpuStr = $stats['CPUPerc'] ?? '0%';
+                    $metrics['cpu_percent'] = (float) str_replace('%', '', $cpuStr);
+
+                    // Memory
+                    $memStr = $stats['MemPerc'] ?? '0%';
+                    $metrics['memory_percent'] = (float) str_replace('%', '', $memStr);
+                    
+                    // Parse memory usage (ex: "123.4MiB / 2GiB")
+                    $memUsage = $stats['MemUsage'] ?? '';
+                    if (preg_match('/^([\d.]+)(\w+)\s*\/\s*([\d.]+)(\w+)/', $memUsage, $matches)) {
+                        $metrics['memory_usage'] = $this->parseMemorySize($matches[1], $matches[2]);
+                        $metrics['memory_limit'] = $this->parseMemorySize($matches[3], $matches[4]);
+                    }
+
+                    // Network (ex: "1.5kB / 2.3kB")
+                    $netIO = $stats['NetIO'] ?? '';
+                    if (preg_match('/^([\d.]+)(\w+)\s*\/\s*([\d.]+)(\w+)/', $netIO, $matches)) {
+                        $metrics['network_rx'] = $this->parseMemorySize($matches[1], $matches[2]);
+                        $metrics['network_tx'] = $this->parseMemorySize($matches[3], $matches[4]);
+                    }
+
+                    // Block I/O (ex: "4.1MB / 0B")
+                    $blockIO = $stats['BlockIO'] ?? '';
+                    if (preg_match('/^([\d.]+)(\w+)\s*\/\s*([\d.]+)(\w+)/', $blockIO, $matches)) {
+                        $metrics['disk_read'] = $this->parseMemorySize($matches[1], $matches[2]);
+                        $metrics['disk_write'] = $this->parseMemorySize($matches[3], $matches[4]);
+                    }
+                }
+            }
+
+            // Obtém uptime
+            $startedAt = $this->runCommand(
+                "docker inspect -f '{{.State.StartedAt}}' {$instance->container_name}",
+                false
+            );
+            if (!empty(trim($startedAt))) {
+                $startTime = new \DateTime(trim($startedAt));
+                $now = new \DateTime();
+                $metrics['uptime'] = $now->getTimestamp() - $startTime->getTimestamp();
+            }
+
+        } catch (\Exception $e) {
+            Log::warning("Erro ao obter métricas do container", [
+                'instance_id' => $instance->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $metrics;
+    }
+
+    /**
+     * Converte tamanho de memória para bytes
+     */
+    private function parseMemorySize(string $value, string $unit): int
+    {
+        $value = (float) $value;
+        $unit = strtoupper($unit);
+
+        return match (true) {
+            str_starts_with($unit, 'K') => (int) ($value * 1024),
+            str_starts_with($unit, 'M') => (int) ($value * 1024 * 1024),
+            str_starts_with($unit, 'G') => (int) ($value * 1024 * 1024 * 1024),
+            str_starts_with($unit, 'T') => (int) ($value * 1024 * 1024 * 1024 * 1024),
+            default => (int) $value,
+        };
+    }
+
+    /**
+     * Altera a senha do banco de dados
+     */
+    public function changePassword(DatabaseInstance $instance, string $newPassword): bool
+    {
+        try {
+            $cmd = match ($instance->engine) {
+                DatabaseInstance::ENGINE_POSTGRES => sprintf(
+                    "docker exec %s psql -U %s -c \"ALTER USER %s WITH PASSWORD '%s';\"",
+                    $instance->container_name,
+                    $instance->username,
+                    $instance->username,
+                    addslashes($newPassword)
+                ),
+                DatabaseInstance::ENGINE_MYSQL => sprintf(
+                    "docker exec %s mysql -u root -p'%s' -e \"ALTER USER '%s'@'%%' IDENTIFIED BY '%s'; FLUSH PRIVILEGES;\"",
+                    $instance->container_name,
+                    $instance->password, // senha atual
+                    $instance->username,
+                    addslashes($newPassword)
+                ),
+                DatabaseInstance::ENGINE_REDIS => sprintf(
+                    "docker exec %s redis-cli -a '%s' CONFIG SET requirepass '%s'",
+                    $instance->container_name,
+                    $instance->password, // senha atual
+                    addslashes($newPassword)
+                ),
+                default => throw new \InvalidArgumentException("Engine não suportada"),
+            };
+
+            $this->runCommand($cmd);
+
+            Log::info("Senha alterada com sucesso", [
+                'instance_id' => $instance->id,
+                'engine' => $instance->engine,
+            ]);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Erro ao alterar senha", [
+                'instance_id' => $instance->id,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
      * Executa comando Docker
      */
     private function runCommand(string $command, bool $throwOnError = true): string

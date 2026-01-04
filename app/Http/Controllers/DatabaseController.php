@@ -234,14 +234,73 @@ class DatabaseController extends Controller
      */
     public function metrics(DatabaseInstance $database): JsonResponse
     {
-        $isRunning = $this->dockerService->isContainerRunning($database);
+        $metrics = $this->dockerService->getContainerMetrics($database);
 
         return response()->json([
             'id' => $database->id,
-            'status' => $isRunning ? 'running' : 'stopped',
-            'container_running' => $isRunning,
-            // Aqui poderiam ser adicionadas métricas via docker stats
+            'uuid' => $database->uuid,
+            'status' => $metrics['running'] ? 'running' : 'stopped',
+            'container_running' => $metrics['running'],
+            'cpu' => [
+                'usage_percent' => $metrics['cpu_percent'] ?? 0,
+            ],
+            'memory' => [
+                'used_bytes' => $metrics['memory_usage'] ?? 0,
+                'limit_bytes' => $metrics['memory_limit'] ?? ($database->ram_mb * 1024 * 1024),
+                'usage_percent' => $metrics['memory_percent'] ?? 0,
+            ],
+            'network' => [
+                'rx_bytes' => $metrics['network_rx'] ?? 0,
+                'tx_bytes' => $metrics['network_tx'] ?? 0,
+            ],
+            'disk' => [
+                'read_bytes' => $metrics['disk_read'] ?? 0,
+                'write_bytes' => $metrics['disk_write'] ?? 0,
+            ],
+            'uptime' => $metrics['uptime'] ?? null,
         ]);
+    }
+
+    /**
+     * Altera a senha do banco de dados
+     */
+    public function changePassword(Request $request, DatabaseInstance $database): JsonResponse
+    {
+        $validated = $request->validate([
+            'password' => 'required|string|min:8|max:128',
+        ]);
+
+        if (!$database->isRunning()) {
+            return response()->json([
+                'message' => 'Banco de dados precisa estar em execução para alterar a senha',
+            ], 422);
+        }
+
+        $success = $this->dockerService->changePassword($database, $validated['password']);
+
+        if ($success) {
+            // Atualiza a senha criptografada no banco
+            $database->password = $validated['password'];
+            $database->save();
+
+            return response()->json(['message' => 'Senha alterada com sucesso']);
+        }
+
+        return response()->json(['message' => 'Falha ao alterar senha'], 500);
+    }
+
+    /**
+     * Reinicia um banco de dados
+     */
+    public function restart(DatabaseInstance $database): JsonResponse
+    {
+        $success = $this->dockerService->restartContainer($database);
+
+        if ($success) {
+            return response()->json(['message' => 'Banco de dados reiniciado com sucesso']);
+        }
+
+        return response()->json(['message' => 'Falha ao reiniciar banco de dados'], 500);
     }
 }
 
