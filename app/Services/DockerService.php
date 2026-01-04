@@ -10,6 +10,16 @@ class DockerService
 {
     private const NETWORK_NAME = 'easytidb_net';
     private const DOCKER_HOST_IP = '147.78.120.1'; // IP da máquina Docker host
+    private const SSL_CERT_DIR = '/opt/easyti-db-certs';
+
+    /**
+     * Verifica se SSL está configurado
+     */
+    private function isSslEnabled(): bool
+    {
+        return file_exists(self::SSL_CERT_DIR . '/server.crt') 
+            && file_exists(self::SSL_CERT_DIR . '/server.key');
+    }
 
     /**
      * Cria container Docker para banco de dados
@@ -30,40 +40,83 @@ class DockerService
     }
 
     /**
-     * Cria container PostgreSQL
+     * Cria container PostgreSQL com SSL
      */
     private function createPostgresContainer(DatabaseInstance $instance): array
     {
         $volumeName = "{$instance->container_name}_data";
         $containerName = $instance->container_name;
+        $sslVolumeName = "{$instance->container_name}_ssl";
 
-        // Cria volume
+        // Cria volumes
         $this->runCommand("docker volume create {$volumeName}");
+        
+        if ($this->isSslEnabled()) {
+            // Cria volume para SSL e copia certificados
+            $this->runCommand("docker volume create {$sslVolumeName}");
+            
+            // Container temporário para copiar certificados
+            $this->runCommand(sprintf(
+                'docker run --rm -v %s:/ssl -v %s:/certs alpine sh -c "cp /certs/* /ssl/ && chmod 600 /ssl/server.key && chmod 644 /ssl/server.crt"',
+                $sslVolumeName,
+                self::SSL_CERT_DIR
+            ));
 
-        // Cria container
-        $cmd = sprintf(
-            'docker run -d ' .
-            '--name %s ' .
-            '--network %s ' .
-            '-p %d:5432 ' .
-            '--cpus=%d ' .
-            '--memory=%dm ' .
-            '-v %s:/var/lib/postgresql/data ' .
-            '-e POSTGRES_USER=%s ' .
-            '-e POSTGRES_PASSWORD=%s ' .
-            '-e POSTGRES_DB=%s ' .
-            '--restart unless-stopped ' .
-            'postgres:16-alpine',
-            $containerName,
-            self::NETWORK_NAME,
-            $instance->port,
-            $instance->vcpu,
-            $instance->ram_mb,
-            $volumeName,
-            $instance->username,
-            $instance->password,
-            $instance->database_name
-        );
+            // Cria container com SSL
+            $cmd = sprintf(
+                'docker run -d ' .
+                '--name %s ' .
+                '--network %s ' .
+                '-p %d:5432 ' .
+                '--cpus=%d ' .
+                '--memory=%dm ' .
+                '-v %s:/var/lib/postgresql/data ' .
+                '-v %s:/var/lib/postgresql/ssl:ro ' .
+                '-e POSTGRES_USER=%s ' .
+                '-e POSTGRES_PASSWORD=%s ' .
+                '-e POSTGRES_DB=%s ' .
+                '--restart unless-stopped ' .
+                'postgres:16-alpine ' .
+                '-c ssl=on ' .
+                '-c ssl_cert_file=/var/lib/postgresql/ssl/server.crt ' .
+                '-c ssl_key_file=/var/lib/postgresql/ssl/server.key',
+                $containerName,
+                self::NETWORK_NAME,
+                $instance->port,
+                $instance->vcpu,
+                $instance->ram_mb,
+                $volumeName,
+                $sslVolumeName,
+                $instance->username,
+                $instance->password,
+                $instance->database_name
+            );
+        } else {
+            // Cria container sem SSL
+            $cmd = sprintf(
+                'docker run -d ' .
+                '--name %s ' .
+                '--network %s ' .
+                '-p %d:5432 ' .
+                '--cpus=%d ' .
+                '--memory=%dm ' .
+                '-v %s:/var/lib/postgresql/data ' .
+                '-e POSTGRES_USER=%s ' .
+                '-e POSTGRES_PASSWORD=%s ' .
+                '-e POSTGRES_DB=%s ' .
+                '--restart unless-stopped ' .
+                'postgres:16-alpine',
+                $containerName,
+                self::NETWORK_NAME,
+                $instance->port,
+                $instance->vcpu,
+                $instance->ram_mb,
+                $volumeName,
+                $instance->username,
+                $instance->password,
+                $instance->database_name
+            );
+        }
 
         $result = $this->runCommand($cmd);
 
@@ -71,46 +124,92 @@ class DockerService
             'container_id' => trim($result),
             'container_name' => $containerName,
             'volume_name' => $volumeName,
+            'ssl_enabled' => $this->isSslEnabled(),
         ];
     }
 
     /**
-     * Cria container MySQL
+     * Cria container MySQL com SSL
      */
     private function createMysqlContainer(DatabaseInstance $instance): array
     {
         $volumeName = "{$instance->container_name}_data";
         $containerName = $instance->container_name;
+        $sslVolumeName = "{$instance->container_name}_ssl";
 
         // Cria volume
         $this->runCommand("docker volume create {$volumeName}");
 
-        // Cria container
-        $cmd = sprintf(
-            'docker run -d ' .
-            '--name %s ' .
-            '--network %s ' .
-            '-p %d:3306 ' .
-            '--cpus=%d ' .
-            '--memory=%dm ' .
-            '-v %s:/var/lib/mysql ' .
-            '-e MYSQL_ROOT_PASSWORD=%s ' .
-            '-e MYSQL_USER=%s ' .
-            '-e MYSQL_PASSWORD=%s ' .
-            '-e MYSQL_DATABASE=%s ' .
-            '--restart unless-stopped ' .
-            'mysql:8.0',
-            $containerName,
-            self::NETWORK_NAME,
-            $instance->port,
-            $instance->vcpu,
-            $instance->ram_mb,
-            $volumeName,
-            $instance->password, // root password
-            $instance->username,
-            $instance->password,
-            $instance->database_name
-        );
+        if ($this->isSslEnabled()) {
+            // Cria volume para SSL e copia certificados
+            $this->runCommand("docker volume create {$sslVolumeName}");
+            
+            $this->runCommand(sprintf(
+                'docker run --rm -v %s:/ssl -v %s:/certs alpine sh -c "cp /certs/* /ssl/ && chmod 644 /ssl/*"',
+                $sslVolumeName,
+                self::SSL_CERT_DIR
+            ));
+
+            // Cria container com SSL
+            $cmd = sprintf(
+                'docker run -d ' .
+                '--name %s ' .
+                '--network %s ' .
+                '-p %d:3306 ' .
+                '--cpus=%d ' .
+                '--memory=%dm ' .
+                '-v %s:/var/lib/mysql ' .
+                '-v %s:/etc/mysql/ssl:ro ' .
+                '-e MYSQL_ROOT_PASSWORD=%s ' .
+                '-e MYSQL_USER=%s ' .
+                '-e MYSQL_PASSWORD=%s ' .
+                '-e MYSQL_DATABASE=%s ' .
+                '--restart unless-stopped ' .
+                'mysql:8.0 ' .
+                '--ssl-ca=/etc/mysql/ssl/server.crt ' .
+                '--ssl-cert=/etc/mysql/ssl/server.crt ' .
+                '--ssl-key=/etc/mysql/ssl/server.key ' .
+                '--require-secure-transport=ON',
+                $containerName,
+                self::NETWORK_NAME,
+                $instance->port,
+                $instance->vcpu,
+                $instance->ram_mb,
+                $volumeName,
+                $sslVolumeName,
+                $instance->password,
+                $instance->username,
+                $instance->password,
+                $instance->database_name
+            );
+        } else {
+            // Cria container sem SSL
+            $cmd = sprintf(
+                'docker run -d ' .
+                '--name %s ' .
+                '--network %s ' .
+                '-p %d:3306 ' .
+                '--cpus=%d ' .
+                '--memory=%dm ' .
+                '-v %s:/var/lib/mysql ' .
+                '-e MYSQL_ROOT_PASSWORD=%s ' .
+                '-e MYSQL_USER=%s ' .
+                '-e MYSQL_PASSWORD=%s ' .
+                '-e MYSQL_DATABASE=%s ' .
+                '--restart unless-stopped ' .
+                'mysql:8.0',
+                $containerName,
+                self::NETWORK_NAME,
+                $instance->port,
+                $instance->vcpu,
+                $instance->ram_mb,
+                $volumeName,
+                $instance->password,
+                $instance->username,
+                $instance->password,
+                $instance->database_name
+            );
+        }
 
         $result = $this->runCommand($cmd);
 
@@ -118,39 +217,81 @@ class DockerService
             'container_id' => trim($result),
             'container_name' => $containerName,
             'volume_name' => $volumeName,
+            'ssl_enabled' => $this->isSslEnabled(),
         ];
     }
 
     /**
-     * Cria container Redis
+     * Cria container Redis com SSL
      */
     private function createRedisContainer(DatabaseInstance $instance): array
     {
         $volumeName = "{$instance->container_name}_data";
         $containerName = $instance->container_name;
+        $sslVolumeName = "{$instance->container_name}_ssl";
 
         // Cria volume
         $this->runCommand("docker volume create {$volumeName}");
 
-        // Cria container Redis com persistência e senha
-        $cmd = sprintf(
-            'docker run -d ' .
-            '--name %s ' .
-            '--network %s ' .
-            '-p %d:6379 ' .
-            '--cpus=%d ' .
-            '--memory=%dm ' .
-            '-v %s:/data ' .
-            '--restart unless-stopped ' .
-            'redis:7-alpine redis-server --appendonly yes --requirepass %s',
-            $containerName,
-            self::NETWORK_NAME,
-            $instance->port,
-            $instance->vcpu,
-            $instance->ram_mb,
-            $volumeName,
-            $instance->password
-        );
+        if ($this->isSslEnabled()) {
+            // Cria volume para SSL e copia certificados
+            $this->runCommand("docker volume create {$sslVolumeName}");
+            
+            $this->runCommand(sprintf(
+                'docker run --rm -v %s:/ssl -v %s:/certs alpine sh -c "cp /certs/* /ssl/ && chmod 644 /ssl/*"',
+                $sslVolumeName,
+                self::SSL_CERT_DIR
+            ));
+
+            // Cria container Redis com TLS
+            $cmd = sprintf(
+                'docker run -d ' .
+                '--name %s ' .
+                '--network %s ' .
+                '-p %d:6379 ' .
+                '--cpus=%d ' .
+                '--memory=%dm ' .
+                '-v %s:/data ' .
+                '-v %s:/etc/redis/ssl:ro ' .
+                '--restart unless-stopped ' .
+                'redis:7-alpine redis-server ' .
+                '--appendonly yes ' .
+                '--requirepass %s ' .
+                '--tls-port 6379 ' .
+                '--port 0 ' .
+                '--tls-cert-file /etc/redis/ssl/server.crt ' .
+                '--tls-key-file /etc/redis/ssl/server.key ' .
+                '--tls-auth-clients no',
+                $containerName,
+                self::NETWORK_NAME,
+                $instance->port,
+                $instance->vcpu,
+                $instance->ram_mb,
+                $volumeName,
+                $sslVolumeName,
+                $instance->password
+            );
+        } else {
+            // Cria container Redis sem SSL
+            $cmd = sprintf(
+                'docker run -d ' .
+                '--name %s ' .
+                '--network %s ' .
+                '-p %d:6379 ' .
+                '--cpus=%d ' .
+                '--memory=%dm ' .
+                '-v %s:/data ' .
+                '--restart unless-stopped ' .
+                'redis:7-alpine redis-server --appendonly yes --requirepass %s',
+                $containerName,
+                self::NETWORK_NAME,
+                $instance->port,
+                $instance->vcpu,
+                $instance->ram_mb,
+                $volumeName,
+                $instance->password
+            );
+        }
 
         $result = $this->runCommand($cmd);
 
@@ -158,6 +299,7 @@ class DockerService
             'container_id' => trim($result),
             'container_name' => $containerName,
             'volume_name' => $volumeName,
+            'ssl_enabled' => $this->isSslEnabled(),
         ];
     }
 
