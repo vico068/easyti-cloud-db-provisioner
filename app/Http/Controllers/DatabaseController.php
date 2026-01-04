@@ -247,6 +247,10 @@ class DatabaseController extends Controller
             return response()->json(['message' => 'Banco de dados não encontrado'], 404);
         }
 
+        // Guarda o slot_id antes de deletar
+        $externalSlotId = $db->external_slot_id;
+        $externalUserId = $db->external_user_id;
+
         // Remove container Docker
         $this->dockerService->removeContainer($db);
 
@@ -254,7 +258,11 @@ class DatabaseController extends Controller
         $db->update(['status' => DatabaseInstance::STATUS_DELETED]);
         $db->delete(); // Soft delete
 
-        return response()->json(['message' => 'Banco de dados removido com sucesso']);
+        return response()->json([
+            'message' => 'Banco de dados removido com sucesso',
+            'external_slot_id' => $externalSlotId,
+            'external_user_id' => $externalUserId,
+        ]);
     }
 
     /**
