@@ -102,10 +102,7 @@ class DatabaseController extends Controller
      */
     public function show(string $database): JsonResponse
     {
-        // Busca pelo UUID ou ID
-        $db = DatabaseInstance::where('uuid', $database)
-            ->orWhere('id', $database)
-            ->first();
+        $db = $this->findDatabase($database);
 
         if (!$db) {
             return response()->json(['message' => 'Banco de dados não encontrado'], 404);
