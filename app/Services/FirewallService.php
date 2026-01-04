@@ -62,7 +62,15 @@ class FirewallService
         try {
             $port = $db->port;
 
-            // Remove todas as regras para esta porta
+            // Remove regras de IPs na whitelist
+            $rules = $db->firewall_rules ?? [];
+            foreach ($rules as $rule) {
+                if (!empty($rule['ip'])) {
+                    $this->removeAllowRule($port, $rule['ip']);
+                }
+            }
+
+            // Remove todas as regras padrão para esta porta
             $this->clearRules($port);
 
             $db->update(['firewall_enabled' => false]);
@@ -184,22 +192,25 @@ class FirewallService
      */
     private function clearRules(int $port): void
     {
-        // Lista regras existentes e remove as relacionadas à porta
-        $output = shell_exec("sudo iptables -L DOCKER-USER -n --line-numbers 2>/dev/null") ?? '';
-        $lines = explode("\n", $output);
-
-        // Coleta números das linhas a serem removidas (de baixo para cima)
-        $linesToRemove = [];
-        foreach ($lines as $line) {
-            if (preg_match('/^(\d+).*dpt:' . $port . '/', $line, $matches)) {
-                $linesToRemove[] = (int)$matches[1];
+        // Remove regras por especificação ao invés de por número de linha
+        // Isso é mais seguro e evita problemas de índice
+        
+        // Remove regra DROP para a porta
+        $this->executeIptables("-D DOCKER-USER -p tcp --dport {$port} -j DROP", false);
+        
+        // Remove regra de localhost
+        $this->executeIptables("-D DOCKER-USER -p tcp --dport {$port} -s 127.0.0.1 -j ACCEPT", false);
+        
+        // Remove regra de rede Docker
+        $this->executeIptables("-D DOCKER-USER -p tcp --dport {$port} -s 172.16.0.0/12 -j ACCEPT", false);
+        
+        // Tenta remover múltiplas vezes caso haja duplicatas
+        for ($i = 0; $i < 10; $i++) {
+            $result = shell_exec("sudo iptables -D DOCKER-USER -p tcp --dport {$port} -j ACCEPT 2>&1");
+            if (strpos($result ?? '', 'No chain/target/match') !== false || 
+                strpos($result ?? '', 'does a matching rule exist') !== false) {
+                break;
             }
-        }
-
-        // Remove de baixo para cima para manter índices corretos
-        rsort($linesToRemove);
-        foreach ($linesToRemove as $lineNum) {
-            $this->executeIptables("-D DOCKER-USER {$lineNum}");
         }
     }
 
@@ -223,18 +234,26 @@ class FirewallService
     /**
      * Executa comando iptables
      */
-    private function executeIptables(string $args, bool $throwOnError = true): void
+    private function executeIptables(string $args, bool $throwOnError = true): bool
     {
         $command = "sudo iptables {$args} 2>&1";
-        $output = shell_exec($command);
+        $output = [];
         $exitCode = 0;
 
-        // Verifica se houve erro
-        exec($command, $outputArray, $exitCode);
+        exec($command, $output, $exitCode);
+        $outputStr = implode("\n", $output);
 
-        if ($exitCode !== 0 && $throwOnError) {
-            throw new \RuntimeException("Erro ao executar iptables: " . implode("\n", $outputArray));
+        // Ignora erros de regra não encontrada ao deletar
+        $isDeleteError = strpos($args, '-D ') !== false && 
+            (strpos($outputStr, 'No chain/target/match') !== false ||
+             strpos($outputStr, 'does a matching rule exist') !== false ||
+             strpos($outputStr, 'Bad rule') !== false);
+
+        if ($exitCode !== 0 && !$isDeleteError && $throwOnError) {
+            throw new \RuntimeException("Erro ao executar iptables: " . $outputStr);
         }
+
+        return $exitCode === 0;
     }
 
     /**
