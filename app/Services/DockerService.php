@@ -55,9 +55,9 @@ class DockerService
             // Cria volume para SSL e copia certificados
             $this->runCommand("docker volume create {$sslVolumeName}");
             
-            // Container temporário para copiar certificados (apenas arquivos .crt e .key)
+            // Container temporário para copiar certificados (UID 70 = postgres no Alpine)
             $this->runCommand(sprintf(
-                'docker run --rm -v %s:/ssl -v %s:/certs alpine sh -c "cp /certs/server.crt /certs/server.key /ssl/ && chmod 600 /ssl/server.key && chmod 644 /ssl/server.crt"',
+                'docker run --rm -v %s:/ssl -v %s:/certs alpine sh -c "cp /certs/server.crt /certs/server.key /ssl/ && chown 70:70 /ssl/* && chmod 600 /ssl/server.key && chmod 644 /ssl/server.crt"',
                 $sslVolumeName,
                 self::SSL_CERT_DIR
             ));
