@@ -336,12 +336,24 @@ class DockerService
     public function isContainerRunning(DatabaseInstance $instance): bool
     {
         try {
-            $result = $this->runCommand(
-                "docker inspect -f '{{.State.Running}}' {$instance->container_name}",
-                false
-            );
-            return trim($result) === 'true';
+            $cmd = "docker inspect -f '{{.State.Running}}' {$instance->container_name}";
+            $result = $this->runCommand($cmd, false);
+            $trimmed = trim($result);
+            
+            Log::debug("isContainerRunning check", [
+                'container_name' => $instance->container_name,
+                'command' => $cmd,
+                'raw_result' => $result,
+                'trimmed_result' => $trimmed,
+                'is_true' => $trimmed === 'true',
+            ]);
+            
+            return $trimmed === 'true';
         } catch (\Exception $e) {
+            Log::warning("isContainerRunning exception", [
+                'container_name' => $instance->container_name,
+                'error' => $e->getMessage(),
+            ]);
             return false;
         }
     }
