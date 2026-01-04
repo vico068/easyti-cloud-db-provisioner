@@ -100,37 +100,41 @@ class DatabaseController extends Controller
     /**
      * Exibe detalhes de um banco de dados
      */
-    public function show(DatabaseInstance $database): JsonResponse
+    public function show(string $database): JsonResponse
     {
-        // Obtém informações de conexão SNI (se disponível)
-        $connectionInfo = $this->sniProxyService->getConnectionInfo($database);
+        // Busca pelo UUID ou ID
+        $db = DatabaseInstance::where('uuid', $database)
+            ->orWhere('id', $database)
+            ->first();
+
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
 
         return response()->json([
-            'id' => $database->id,
-            'uuid' => $database->uuid,
-            'engine' => $database->engine,
-            'status' => $database->status,
-            'host' => $database->host,
-            'port' => $database->port,
-            'username' => $database->username,
-            'password' => $database->password, // Descriptografado pelo accessor
-            'database_name' => $database->database_name,
-            'container_name' => $database->container_name,
-            'container_id' => $database->container_id,
-            'volume_name' => $database->volume_name,
-            'vcpu' => $database->vcpu,
-            'ram_mb' => $database->ram_mb,
-            'disk_gb' => $database->disk_gb,
-            'external_user_id' => $database->external_user_id,
-            'external_slot_id' => $database->external_slot_id,
-            'external_request_id' => $database->external_request_id,
-            'error_message' => $database->error_message,
-            'metadata' => $database->metadata,
-            'created_at' => $database->created_at,
-            'updated_at' => $database->updated_at,
-            'provisioned_at' => $database->provisioned_at,
-            // Informações de conexão SNI
-            'connection' => $connectionInfo,
+            'id' => $db->id,
+            'uuid' => $db->uuid,
+            'engine' => $db->engine,
+            'status' => $db->status,
+            'host' => $db->host,
+            'port' => $db->port,
+            'username' => $db->username,
+            'password' => $db->password,
+            'database_name' => $db->database_name,
+            'container_name' => $db->container_name,
+            'container_id' => $db->container_id,
+            'volume_name' => $db->volume_name,
+            'vcpu' => $db->vcpu,
+            'ram_mb' => $db->ram_mb,
+            'disk_gb' => $db->disk_gb,
+            'external_user_id' => $db->external_user_id,
+            'external_slot_id' => $db->external_slot_id,
+            'external_request_id' => $db->external_request_id,
+            'error_message' => $db->error_message,
+            'metadata' => $db->metadata,
+            'created_at' => $db->created_at,
+            'updated_at' => $db->updated_at,
+            'provisioned_at' => $db->provisioned_at,
         ]);
     }
 
@@ -166,20 +170,35 @@ class DatabaseController extends Controller
     }
 
     /**
+     * Busca database por UUID ou ID
+     */
+    private function findDatabase(string $identifier): ?DatabaseInstance
+    {
+        return DatabaseInstance::where('uuid', $identifier)
+            ->orWhere('id', $identifier)
+            ->first();
+    }
+
+    /**
      * Para um banco de dados
      */
-    public function stop(DatabaseInstance $database): JsonResponse
+    public function stop(string $database): JsonResponse
     {
-        if (!$database->isRunning()) {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        if (!$db->isRunning()) {
             return response()->json([
                 'message' => 'Banco de dados não está em execução',
             ], 422);
         }
 
-        $success = $this->dockerService->stopContainer($database);
+        $success = $this->dockerService->stopContainer($db);
 
         if ($success) {
-            $database->update(['status' => DatabaseInstance::STATUS_STOPPED]);
+            $db->update(['status' => DatabaseInstance::STATUS_STOPPED]);
             return response()->json(['message' => 'Banco de dados parado com sucesso']);
         }
 
@@ -189,18 +208,23 @@ class DatabaseController extends Controller
     /**
      * Inicia um banco de dados
      */
-    public function start(DatabaseInstance $database): JsonResponse
+    public function start(string $database): JsonResponse
     {
-        if ($database->status !== DatabaseInstance::STATUS_STOPPED) {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        if ($db->status !== DatabaseInstance::STATUS_STOPPED) {
             return response()->json([
                 'message' => 'Banco de dados não está parado',
             ], 422);
         }
 
-        $success = $this->dockerService->startContainer($database);
+        $success = $this->dockerService->startContainer($db);
 
         if ($success) {
-            $database->update(['status' => DatabaseInstance::STATUS_RUNNING]);
+            $db->update(['status' => DatabaseInstance::STATUS_RUNNING]);
             return response()->json(['message' => 'Banco de dados iniciado com sucesso']);
         }
 
@@ -210,14 +234,19 @@ class DatabaseController extends Controller
     /**
      * Remove um banco de dados
      */
-    public function destroy(DatabaseInstance $database): JsonResponse
+    public function destroy(string $database): JsonResponse
     {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
         // Remove container Docker
-        $this->dockerService->removeContainer($database);
+        $this->dockerService->removeContainer($db);
 
         // Marca como deletado
-        $database->update(['status' => DatabaseInstance::STATUS_DELETED]);
-        $database->delete(); // Soft delete
+        $db->update(['status' => DatabaseInstance::STATUS_DELETED]);
+        $db->delete(); // Soft delete
 
         return response()->json(['message' => 'Banco de dados removido com sucesso']);
     }
@@ -225,13 +254,18 @@ class DatabaseController extends Controller
     /**
      * Obtém métricas de um banco
      */
-    public function metrics(DatabaseInstance $database): JsonResponse
+    public function metrics(string $database): JsonResponse
     {
-        $metrics = $this->dockerService->getContainerMetrics($database);
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $metrics = $this->dockerService->getContainerMetrics($db);
 
         return response()->json([
-            'id' => $database->id,
-            'uuid' => $database->uuid,
+            'id' => $db->id,
+            'uuid' => $db->uuid,
             'status' => $metrics['running'] ? 'running' : 'stopped',
             'container_running' => $metrics['running'],
             'cpu' => [
@@ -239,7 +273,7 @@ class DatabaseController extends Controller
             ],
             'memory' => [
                 'used_bytes' => $metrics['memory_usage'] ?? 0,
-                'limit_bytes' => $metrics['memory_limit'] ?? ($database->ram_mb * 1024 * 1024),
+                'limit_bytes' => $metrics['memory_limit'] ?? ($db->ram_mb * 1024 * 1024),
                 'usage_percent' => $metrics['memory_percent'] ?? 0,
             ],
             'network' => [
@@ -257,24 +291,29 @@ class DatabaseController extends Controller
     /**
      * Altera a senha do banco de dados
      */
-    public function changePassword(Request $request, DatabaseInstance $database): JsonResponse
+    public function changePassword(Request $request, string $database): JsonResponse
     {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
         $validated = $request->validate([
             'password' => 'required|string|min:8|max:128',
         ]);
 
-        if (!$database->isRunning()) {
+        if (!$db->isRunning()) {
             return response()->json([
                 'message' => 'Banco de dados precisa estar em execução para alterar a senha',
             ], 422);
         }
 
-        $success = $this->dockerService->changePassword($database, $validated['password']);
+        $success = $this->dockerService->changePassword($db, $validated['password']);
 
         if ($success) {
             // Atualiza a senha criptografada no banco
-            $database->password = $validated['password'];
-            $database->save();
+            $db->password = $validated['password'];
+            $db->save();
 
             return response()->json(['message' => 'Senha alterada com sucesso']);
         }
@@ -285,9 +324,14 @@ class DatabaseController extends Controller
     /**
      * Reinicia um banco de dados
      */
-    public function restart(DatabaseInstance $database): JsonResponse
+    public function restart(string $database): JsonResponse
     {
-        $success = $this->dockerService->restartContainer($database);
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $success = $this->dockerService->restartContainer($db);
 
         if ($success) {
             return response()->json(['message' => 'Banco de dados reiniciado com sucesso']);
