@@ -35,4 +35,28 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | API Key para autenticação entre serviços
+    |--------------------------------------------------------------------------
+    */
+    'api_key' => env('PROVISIONER_API_KEY'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | AWS S3 para Backups
+    |--------------------------------------------------------------------------
+    */
+    'backup' => [
+        'enabled' => env('BACKUP_ENABLED', true),
+        's3' => [
+            'key' => env('BACKUP_AWS_ACCESS_KEY_ID'),
+            'secret' => env('BACKUP_AWS_SECRET_ACCESS_KEY'),
+            'region' => env('BACKUP_AWS_REGION', 'us-east-1'),
+            'bucket' => env('BACKUP_S3_BUCKET', 'easyticloud-db-backups'),
+        ],
+        'retention_days' => env('BACKUP_RETENTION_DAYS', 30),
+        'max_concurrent' => env('BACKUP_MAX_CONCURRENT', 6),
+    ],
+
 ];

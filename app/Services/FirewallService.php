@@ -7,6 +7,8 @@ use Illuminate\Support\Facades\Log;
 
 class FirewallService
 {
+    private const RULES_FILE = '/etc/iptables/rules.v4';
+    private const BACKUP_FILE = '/etc/iptables/rules.v4.backup';
     /**
      * Ativa o firewall para um banco de dados
      * Bloqueia todo tráfego externo e só permite IPs na whitelist
@@ -38,6 +40,9 @@ class FirewallService
             }
 
             $db->update(['firewall_enabled' => true]);
+
+            // Persiste as regras
+            $this->saveRules();
 
             Log::info("Firewall ativado para banco de dados", [
                 'database_id' => $db->id,
@@ -74,6 +79,9 @@ class FirewallService
             $this->clearRules($port);
 
             $db->update(['firewall_enabled' => false]);
+
+            // Persiste as regras
+            $this->saveRules();
 
             Log::info("Firewall desativado para banco de dados", [
                 'database_id' => $db->id,
@@ -122,6 +130,7 @@ class FirewallService
         // Se firewall está ativo, aplica a regra
         if ($db->firewall_enabled) {
             $this->addAllowRule($db->port, $ip);
+            $this->saveRules();
         }
 
         Log::info("Regra de firewall adicionada", [
@@ -157,6 +166,7 @@ class FirewallService
         // Se firewall está ativo, remove a regra do iptables
         if ($db->firewall_enabled) {
             $this->removeAllowRule($db->port, $ip);
+            $this->saveRules();
         }
 
         Log::info("Regra de firewall removida", [
@@ -284,6 +294,91 @@ class FirewallService
     public function detectClientIp(): ?string
     {
         return request()->ip();
+    }
+
+    // ==================== PERSISTÊNCIA ====================
+
+    /**
+     * Salva as regras atuais do iptables para persistência
+     */
+    public function saveRules(): bool
+    {
+        try {
+            // Garante que o diretório existe
+            if (!is_dir('/etc/iptables')) {
+                exec('sudo mkdir -p /etc/iptables 2>&1', $output, $exitCode);
+            }
+
+            // Salva as regras
+            $command = 'sudo iptables-save > ' . self::RULES_FILE . ' 2>&1';
+            exec($command, $output, $exitCode);
+
+            if ($exitCode !== 0) {
+                // Tenta método alternativo
+                $rules = shell_exec('sudo iptables-save 2>&1');
+                if ($rules) {
+                    exec("echo " . escapeshellarg($rules) . " | sudo tee " . self::RULES_FILE . " > /dev/null 2>&1", $output, $exitCode);
+                }
+            }
+
+            Log::info("Regras de iptables salvas com sucesso");
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Erro ao salvar regras de iptables", ['error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * Restaura as regras do arquivo de persistência
+     */
+    public function restoreRules(): bool
+    {
+        try {
+            if (!file_exists(self::RULES_FILE)) {
+                Log::info("Arquivo de regras não encontrado, pulando restauração");
+                return true;
+            }
+
+            $command = 'sudo iptables-restore < ' . self::RULES_FILE . ' 2>&1';
+            exec($command, $output, $exitCode);
+
+            if ($exitCode !== 0) {
+                Log::warning("Falha ao restaurar regras do arquivo", ['output' => implode("\n", $output)]);
+                return false;
+            }
+
+            Log::info("Regras de iptables restauradas com sucesso");
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Erro ao restaurar regras de iptables", ['error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /**
+     * Restaura todas as regras de firewall do banco de dados
+     * Útil após reiniciar o servidor ou em caso de falha
+     */
+    public function restoreAllFromDatabase(): int
+    {
+        $count = 0;
+        $databases = DatabaseInstance::where('firewall_enabled', true)->get();
+
+        foreach ($databases as $db) {
+            try {
+                if ($this->enableFirewall($db)) {
+                    $count++;
+                }
+            } catch (\Exception $e) {
+                Log::error("Erro ao restaurar firewall para banco {$db->id}", [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        Log::info("Regras de firewall restauradas do banco de dados", ['count' => $count]);
+        return $count;
     }
 }
 
