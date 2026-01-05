@@ -32,6 +32,12 @@ Route::prefix('/databases')->group(function () {
         Route::post('/firewall', [DatabaseController::class, 'toggleFirewall']);
         Route::post('/firewall/rules', [DatabaseController::class, 'addFirewallRule']);
         Route::delete('/firewall/rules', [DatabaseController::class, 'removeFirewallRule']);
+        
+        // Backups
+        Route::get('/backups', [DatabaseController::class, 'listBackups']);
+        Route::post('/backups', [DatabaseController::class, 'createBackup']);
+        Route::post('/backups/download', [DatabaseController::class, 'downloadBackup']);
+        Route::post('/backups/restore', [DatabaseController::class, 'restoreBackup']);
     });
 });
 

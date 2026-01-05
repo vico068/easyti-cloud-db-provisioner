@@ -352,5 +352,165 @@ class BackupService
         }
         return round($bytes, 2) . ' ' . $units[$i];
     }
+
+    /**
+     * Gera URL de download pré-assinada do S3
+     */
+    public function getDownloadUrl(string $s3Key, int $expiresIn = 3600): string
+    {
+        $cmd = $this->getS3Client()->getCommand('GetObject', [
+            'Bucket' => $this->bucket,
+            'Key' => $s3Key,
+        ]);
+
+        $request = $this->getS3Client()->createPresignedRequest($cmd, "+{$expiresIn} seconds");
+        
+        return (string) $request->getUri();
+    }
+
+    /**
+     * Restaura banco de dados a partir de backup S3
+     */
+    public function restoreDatabase(DatabaseInstance $db, string $s3Key): array
+    {
+        $startTime = microtime(true);
+        $localFile = null;
+        $decompressedFile = null;
+
+        try {
+            Log::info("Iniciando restauração do banco de dados", [
+                'database_id' => $db->id,
+                's3_key' => $s3Key,
+            ]);
+
+            // Verifica se o container está rodando
+            if (!$this->isContainerRunning($db->container_name)) {
+                throw new \RuntimeException("Container {$db->container_name} não está em execução");
+            }
+
+            // Baixa backup do S3
+            $timestamp = now()->format('Y-m-d_H-i-s');
+            $localFile = "/tmp/restore_{$db->id}_{$timestamp}.sql.gz";
+            
+            $result = $this->getS3Client()->getObject([
+                'Bucket' => $this->bucket,
+                'Key' => $s3Key,
+                'SaveAs' => $localFile,
+            ]);
+
+            // Descomprime
+            $decompressedFile = str_replace('.gz', '', $localFile);
+            exec("gunzip -c {$localFile} > {$decompressedFile} 2>&1", $output, $exitCode);
+
+            if ($exitCode !== 0) {
+                throw new \RuntimeException("Falha ao descomprimir backup");
+            }
+
+            // Restaura
+            $this->executeRestore($db, $decompressedFile);
+
+            // Limpa arquivos temporários
+            @unlink($localFile);
+            @unlink($decompressedFile);
+
+            $duration = round(microtime(true) - $startTime, 2);
+
+            Log::info("Restauração concluída com sucesso", [
+                'database_id' => $db->id,
+                's3_key' => $s3Key,
+                'duration' => "{$duration}s",
+            ]);
+
+            // Atualiza metadados
+            $metadata = $db->metadata ?? [];
+            $metadata['last_restore'] = [
+                'timestamp' => now()->toIso8601String(),
+                's3_key' => $s3Key,
+            ];
+            $db->update(['metadata' => $metadata]);
+
+            return [
+                'success' => true,
+                'duration' => $duration,
+            ];
+
+        } catch (\Exception $e) {
+            Log::error("Erro na restauração do banco de dados", [
+                'database_id' => $db->id,
+                's3_key' => $s3Key,
+                'error' => $e->getMessage(),
+            ]);
+
+            // Limpa arquivos temporários
+            if ($localFile && file_exists($localFile)) {
+                @unlink($localFile);
+            }
+            if ($decompressedFile && file_exists($decompressedFile)) {
+                @unlink($decompressedFile);
+            }
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Executa restauração de acordo com a engine
+     */
+    private function executeRestore(DatabaseInstance $db, string $inputFile): void
+    {
+        $command = match($db->engine) {
+            'postgres' => $this->buildPgRestoreCommand($db, $inputFile),
+            'mysql' => $this->buildMysqlRestoreCommand($db, $inputFile),
+            'redis' => $this->buildRedisRestoreCommand($db, $inputFile),
+            default => throw new \InvalidArgumentException("Engine não suportada para restore: {$db->engine}"),
+        };
+
+        exec($command, $output, $exitCode);
+
+        if ($exitCode !== 0) {
+            throw new \RuntimeException("Restauração falhou (exit code: {$exitCode}): " . implode("\n", $output));
+        }
+    }
+
+    /**
+     * Comando para restaurar PostgreSQL
+     */
+    private function buildPgRestoreCommand(DatabaseInstance $db, string $inputFile): string
+    {
+        $password = $db->password;
+        $database = $db->database_name;
+        $container = $db->container_name;
+
+        // Primeiro limpa o banco, depois restaura
+        return "docker exec -e PGPASSWORD='{$password}' {$container} psql -U postgres -d {$database} -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' && " .
+               "docker exec -i -e PGPASSWORD='{$password}' {$container} psql -U postgres -d {$database} < {$inputFile} 2>&1";
+    }
+
+    /**
+     * Comando para restaurar MySQL
+     */
+    private function buildMysqlRestoreCommand(DatabaseInstance $db, string $inputFile): string
+    {
+        $password = $db->password;
+        $database = $db->database_name;
+        $container = $db->container_name;
+
+        return "docker exec -i {$container} mysql -u root -p'{$password}' {$database} < {$inputFile} 2>&1";
+    }
+
+    /**
+     * Comando para restaurar Redis
+     */
+    private function buildRedisRestoreCommand(DatabaseInstance $db, string $inputFile): string
+    {
+        $container = $db->container_name;
+
+        // Para Redis, copia o arquivo RDB
+        return "docker cp {$inputFile} {$container}:/data/dump.rdb && " .
+               "docker exec {$container} redis-cli BGSAVE 2>&1";
+    }
 }
 

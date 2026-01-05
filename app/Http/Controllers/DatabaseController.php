@@ -5,17 +5,20 @@ namespace App\Http\Controllers;
 use App\Jobs\ProvisionDatabaseJob;
 use App\Models\DatabaseInstance;
 use App\Models\ProvisionRequest;
+use App\Services\BackupService;
 use App\Services\DockerService;
 use App\Services\FirewallService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Storage;
 
 class DatabaseController extends Controller
 {
     public function __construct(
         private DockerService $dockerService,
-        private FirewallService $firewallService
+        private FirewallService $firewallService,
+        private BackupService $backupService
     ) {
     }
 
@@ -461,6 +464,131 @@ class DatabaseController extends Controller
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (\Exception $e) {
             return response()->json(['message' => 'Erro ao remover regra'], 500);
+        }
+    }
+
+    // ==================== BACKUPS ====================
+
+    /**
+     * Lista backups de um banco de dados
+     */
+    public function listBackups(string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $backups = $this->backupService->listBackups($db, 50);
+        $lastBackup = $db->metadata['last_backup'] ?? null;
+
+        return response()->json([
+            'backups' => $backups,
+            'last_backup' => $lastBackup,
+            'backup_history' => $db->metadata['backup_history'] ?? [],
+        ]);
+    }
+
+    /**
+     * Cria backup manual
+     */
+    public function createBackup(string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        if ($db->status !== DatabaseInstance::STATUS_RUNNING) {
+            return response()->json(['message' => 'Banco de dados precisa estar em execução'], 422);
+        }
+
+        try {
+            $result = $this->backupService->backupDatabase($db);
+
+            if ($result['success']) {
+                return response()->json([
+                    'message' => 'Backup criado com sucesso',
+                    's3_key' => $result['s3_key'],
+                    'size' => $result['size'],
+                    'duration' => $result['duration'],
+                ]);
+            }
+
+            return response()->json([
+                'message' => 'Falha ao criar backup',
+                'error' => $result['error'] ?? 'Erro desconhecido',
+            ], 500);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Erro ao criar backup',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Gera URL de download do backup
+     */
+    public function downloadBackup(Request $request, string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $validated = $request->validate([
+            's3_key' => 'required|string',
+        ]);
+
+        try {
+            $url = $this->backupService->getDownloadUrl($validated['s3_key']);
+
+            return response()->json([
+                'url' => $url,
+                'expires_in' => 3600, // 1 hora
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Erro ao gerar URL de download',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Restaura banco de dados a partir de backup
+     */
+    public function restoreBackup(Request $request, string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $validated = $request->validate([
+            's3_key' => 'required|string',
+        ]);
+
+        try {
+            $result = $this->backupService->restoreDatabase($db, $validated['s3_key']);
+
+            if ($result['success']) {
+                return response()->json([
+                    'message' => 'Banco de dados restaurado com sucesso',
+                    'duration' => $result['duration'],
+                ]);
+            }
+
+            return response()->json([
+                'message' => 'Falha ao restaurar banco de dados',
+                'error' => $result['error'] ?? 'Erro desconhecido',
+            ], 500);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Erro ao restaurar banco de dados',
+                'error' => $e->getMessage(),
+            ], 500);
         }
     }
 }
