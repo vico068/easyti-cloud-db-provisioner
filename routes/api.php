@@ -38,6 +38,10 @@ Route::prefix('/databases')->group(function () {
         Route::post('/backups', [DatabaseController::class, 'createBackup']);
         Route::post('/backups/download', [DatabaseController::class, 'downloadBackup']);
         Route::post('/backups/restore', [DatabaseController::class, 'restoreBackup']);
+        
+        // Backup Jobs (progresso)
+        Route::get('/backup-jobs', [DatabaseController::class, 'listBackupJobs']);
+        Route::get('/backup-jobs/{jobUuid}', [DatabaseController::class, 'getBackupStatus']);
     });
 });
 

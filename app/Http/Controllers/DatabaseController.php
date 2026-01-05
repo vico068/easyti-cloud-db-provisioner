@@ -2,7 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\ProcessBackupJob;
+use App\Jobs\ProcessRestoreJob;
 use App\Jobs\ProvisionDatabaseJob;
+use App\Models\BackupJob;
 use App\Models\DatabaseInstance;
 use App\Models\ProvisionRequest;
 use App\Services\BackupService;
@@ -490,7 +493,7 @@ class DatabaseController extends Controller
     }
 
     /**
-     * Cria backup manual
+     * Cria backup manual (dispara job assíncrono)
      */
     public function createBackup(string $database): JsonResponse
     {
@@ -503,28 +506,128 @@ class DatabaseController extends Controller
             return response()->json(['message' => 'Banco de dados precisa estar em execução'], 422);
         }
 
-        try {
-            $result = $this->backupService->backupDatabase($db);
+        // Verifica se já existe backup em andamento
+        $existingJob = BackupJob::where('database_instance_id', $db->id)
+            ->whereIn('status', [BackupJob::STATUS_PENDING, BackupJob::STATUS_RUNNING])
+            ->first();
 
-            if ($result['success']) {
-                return response()->json([
-                    'message' => 'Backup criado com sucesso',
-                    's3_key' => $result['s3_key'],
-                    'size' => $result['size'],
-                    'duration' => $result['duration'],
-                ]);
-            }
+        if ($existingJob) {
+            return response()->json([
+                'message' => 'Já existe um backup em andamento',
+                'backup_job' => [
+                    'uuid' => $existingJob->uuid,
+                    'status' => $existingJob->status,
+                    'progress' => $existingJob->progress,
+                    'current_step' => $existingJob->current_step,
+                ],
+            ], 409);
+        }
+
+        try {
+            // Cria registro do job de backup
+            $backupJob = BackupJob::create([
+                'database_instance_id' => $db->id,
+                'type' => BackupJob::TYPE_MANUAL,
+                'status' => BackupJob::STATUS_PENDING,
+                'progress' => 0,
+                'current_step' => 'Aguardando na fila...',
+            ]);
+
+            // Dispara job na fila
+            ProcessBackupJob::dispatch($backupJob);
 
             return response()->json([
-                'message' => 'Falha ao criar backup',
-                'error' => $result['error'] ?? 'Erro desconhecido',
-            ], 500);
+                'message' => 'Backup iniciado com sucesso',
+                'backup_job' => [
+                    'uuid' => $backupJob->uuid,
+                    'status' => $backupJob->status,
+                    'progress' => $backupJob->progress,
+                    'current_step' => $backupJob->current_step,
+                ],
+            ], 202); // 202 Accepted
         } catch (\Exception $e) {
             return response()->json([
-                'message' => 'Erro ao criar backup',
+                'message' => 'Erro ao iniciar backup',
                 'error' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Consulta status de um job de backup
+     */
+    public function getBackupStatus(string $database, string $jobUuid): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $backupJob = BackupJob::where('uuid', $jobUuid)
+            ->where('database_instance_id', $db->id)
+            ->first();
+
+        if (!$backupJob) {
+            return response()->json(['message' => 'Job de backup não encontrado'], 404);
+        }
+
+        return response()->json([
+            'uuid' => $backupJob->uuid,
+            'type' => $backupJob->type,
+            'status' => $backupJob->status,
+            'progress' => $backupJob->progress,
+            'current_step' => $backupJob->current_step,
+            'size_bytes' => $backupJob->size_bytes,
+            'size_formatted' => $backupJob->getFormattedSize(),
+            's3_key' => $backupJob->s3_key,
+            'error_message' => $backupJob->error_message,
+            'duration' => $backupJob->getDuration(),
+            'started_at' => $backupJob->started_at?->toIso8601String(),
+            'completed_at' => $backupJob->completed_at?->toIso8601String(),
+            'created_at' => $backupJob->created_at->toIso8601String(),
+        ]);
+    }
+
+    /**
+     * Lista jobs de backup recentes de um banco
+     */
+    public function listBackupJobs(string $database): JsonResponse
+    {
+        $db = $this->findDatabase($database);
+        if (!$db) {
+            return response()->json(['message' => 'Banco de dados não encontrado'], 404);
+        }
+
+        $jobs = BackupJob::where('database_instance_id', $db->id)
+            ->orderBy('created_at', 'desc')
+            ->limit(20)
+            ->get()
+            ->map(fn($job) => [
+                'uuid' => $job->uuid,
+                'type' => $job->type,
+                'status' => $job->status,
+                'progress' => $job->progress,
+                'current_step' => $job->current_step,
+                'size_formatted' => $job->getFormattedSize(),
+                's3_key' => $job->s3_key,
+                'duration' => $job->getDuration(),
+                'created_at' => $job->created_at->toIso8601String(),
+            ]);
+
+        // Verifica se tem job em andamento
+        $currentJob = BackupJob::where('database_instance_id', $db->id)
+            ->whereIn('status', [BackupJob::STATUS_PENDING, BackupJob::STATUS_RUNNING])
+            ->first();
+
+        return response()->json([
+            'jobs' => $jobs,
+            'current_job' => $currentJob ? [
+                'uuid' => $currentJob->uuid,
+                'status' => $currentJob->status,
+                'progress' => $currentJob->progress,
+                'current_step' => $currentJob->current_step,
+            ] : null,
+        ]);
     }
 
     /**
@@ -559,6 +662,9 @@ class DatabaseController extends Controller
     /**
      * Restaura banco de dados a partir de backup
      */
+    /**
+     * Restaura banco de dados (dispara job assíncrono)
+     */
     public function restoreBackup(Request $request, string $database): JsonResponse
     {
         $db = $this->findDatabase($database);
@@ -570,23 +676,50 @@ class DatabaseController extends Controller
             's3_key' => 'required|string',
         ]);
 
-        try {
-            $result = $this->backupService->restoreDatabase($db, $validated['s3_key']);
+        // Verifica se já existe restauração em andamento
+        $existingJob = BackupJob::where('database_instance_id', $db->id)
+            ->where('type', BackupJob::TYPE_RESTORE)
+            ->whereIn('status', [BackupJob::STATUS_PENDING, BackupJob::STATUS_RUNNING])
+            ->first();
 
-            if ($result['success']) {
-                return response()->json([
-                    'message' => 'Banco de dados restaurado com sucesso',
-                    'duration' => $result['duration'],
-                ]);
-            }
+        if ($existingJob) {
+            return response()->json([
+                'message' => 'Já existe uma restauração em andamento',
+                'backup_job' => [
+                    'uuid' => $existingJob->uuid,
+                    'status' => $existingJob->status,
+                    'progress' => $existingJob->progress,
+                    'current_step' => $existingJob->current_step,
+                ],
+            ], 409);
+        }
+
+        try {
+            // Cria registro do job de restauração
+            $backupJob = BackupJob::create([
+                'database_instance_id' => $db->id,
+                'type' => BackupJob::TYPE_RESTORE,
+                'status' => BackupJob::STATUS_PENDING,
+                'progress' => 0,
+                'current_step' => 'Aguardando na fila...',
+                's3_key' => $validated['s3_key'],
+            ]);
+
+            // Dispara job na fila
+            ProcessRestoreJob::dispatch($backupJob, $validated['s3_key']);
 
             return response()->json([
-                'message' => 'Falha ao restaurar banco de dados',
-                'error' => $result['error'] ?? 'Erro desconhecido',
-            ], 500);
+                'message' => 'Restauração iniciada com sucesso',
+                'backup_job' => [
+                    'uuid' => $backupJob->uuid,
+                    'status' => $backupJob->status,
+                    'progress' => $backupJob->progress,
+                    'current_step' => $backupJob->current_step,
+                ],
+            ], 202); // 202 Accepted
         } catch (\Exception $e) {
             return response()->json([
-                'message' => 'Erro ao restaurar banco de dados',
+                'message' => 'Erro ao iniciar restauração',
                 'error' => $e->getMessage(),
             ], 500);
         }

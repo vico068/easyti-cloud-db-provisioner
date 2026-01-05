@@ -207,9 +207,17 @@ class BackupService
     }
 
     /**
-     * Upload para S3
+     * Upload para S3 (privado)
      */
     private function uploadToS3(string $filePath, string $s3Key): void
+    {
+        $this->uploadFile($filePath, $s3Key);
+    }
+
+    /**
+     * Upload público para S3 (usado pelo Job)
+     */
+    public function uploadFile(string $filePath, string $s3Key): void
     {
         try {
             $this->getS3Client()->putObject([
@@ -225,6 +233,22 @@ class BackupService
             ]);
         } catch (AwsException $e) {
             throw new \RuntimeException("Falha no upload S3: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Download público do S3 (usado pelo Job de Restore)
+     */
+    public function downloadFile(string $s3Key, string $localPath): void
+    {
+        try {
+            $this->getS3Client()->getObject([
+                'Bucket' => $this->bucket,
+                'Key' => $s3Key,
+                'SaveAs' => $localPath,
+            ]);
+        } catch (AwsException $e) {
+            throw new \RuntimeException("Falha no download S3: " . $e->getMessage());
         }
     }
 
